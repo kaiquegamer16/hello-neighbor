@@ -3,26 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>FPS - Neighbor2</title>
+    <title>Neighbor NPC Game</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: sans-serif; touch-action: none; }
         #instructions {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
-            color: white; background: rgba(0,0,0,0.5); cursor: pointer; z-index: 20;
+            color: white; background: rgba(0,0,0,0.5); cursor: pointer; z-index: 20; text-align: center;
         }
         #mobile-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: none; }
         #joystick-container { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
         #joystick-knob { position: absolute; top: 35px; left: 35px; width: 50px; height: 50px; background: white; border-radius: 50%; }
         #jump-button { position: absolute; bottom: 50px; right: 40px; width: 70px; height: 70px; background: rgba(255,255,255,0.3); border: 2px solid white; border-radius: 50%; color: white; display: flex; justify-content: center; align-items: center; pointer-events: auto; font-weight: bold; }
         #touch-camera-area { position: absolute; top: 0; right: 0; width: 60%; height: 100%; pointer-events: auto; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: white; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; }
     </style>
 </head>
 <body>
 
+    <div id="crosshair"></div>
     <div id="instructions">
-        <h1>CARREGANDO MODELO...</h1>
-        <p>Certifique-se que 'neighbor2.glb' está na mesma pasta.</p>
+        <h1>CARREGANDO NPC...</h1>
+        <p>Certifique-se que 'neighbor.glb' está na pasta.</p>
     </div>
 
     <div id="mobile-ui">
@@ -47,22 +49,20 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import * as CANNON from 'cannon-es';
 
-        let camera, scene, renderer, controls, world, playerBody, neighborModel;
+        let camera, scene, renderer, controls, world;
+        let playerBody, neighborBody, neighborVisual;
         let lastTime = performance.now();
         const moveState = { fwd: 0, bwd: 0, left: 0, right: 0 };
         let canJump = false;
         const isMobile = /Android|iPhone/i.test(navigator.userAgent);
 
-        const _vDirection = new THREE.Vector3();
-        const _vRight = new THREE.Vector3();
-        const _worldUp = new THREE.Vector3(0, 1, 0);
-
         init();
 
         function init() {
+            // Cena
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 50);
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
@@ -71,8 +71,7 @@
             renderer.shadowMap.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const ambient = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(ambient);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
             const sun = new THREE.DirectionalLight(0xffffff, 1);
             sun.position.set(10, 20, 10);
             sun.castShadow = true;
@@ -82,140 +81,111 @@
             world = new CANNON.World();
             world.gravity.set(0, -20, 0);
 
-            // Chão
-            createGround();
+            // Chão (Cubo esticado)
+            const groundGeo = new THREE.BoxGeometry(100, 2, 100);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+            const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.position.y = -1;
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
 
-            // Player Corpo Físico
-            playerBody = new CANNON.Body({
-                mass: 70,
-                shape: new CANNON.Sphere(0.6),
-                fixedRotation: true,
-                linearDamping: 0.9
-            });
-            playerBody.position.set(0, 2, 0);
+            const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(50, 1, 50)) });
+            groundBody.position.set(0, -1, 0);
+            world.addBody(groundBody);
+
+            // Player (Sua colisão)
+            playerBody = new CANNON.Body({ mass: 70, shape: new CANNON.Sphere(0.6), fixedRotation: true, linearDamping: 0.9 });
+            playerBody.position.set(0, 5, 0);
             world.addBody(playerBody);
 
-            // Carregar Modelo neighbor2.glb
+            // Carregar NPC Neighbor
             const loader = new GLTFLoader();
-            loader.load('neighborb.glb', (gltf) => {
-                neighborModel = gltf.scene;
-                neighborModel.traverse(n => { if (n.isMesh) n.castShadow = true; });
-                scene.add(neighborModel);
-                
-                document.getElementById('instructions').innerHTML = "<h1>CLIQUE PARA JOGAR</h1>";
-            }, undefined, (error) => {
-                console.error("Erro ao carregar o modelo:", error);
-                document.getElementById('instructions').innerHTML = "<h1>MODELO NÃO ENCONTRADO</h1><p>Verifique o arquivo neighbor2.glb</p>";
+            loader.load('neighbor.glb', (gltf) => {
+                neighborVisual = gltf.scene;
+                neighborVisual.traverse(n => { if (n.isMesh) n.castShadow = true; });
+                scene.add(neighborVisual);
+
+                // Física do NPC (Para você não atravessar ele)
+                neighborBody = new CANNON.Body({ 
+                    mass: 80, 
+                    shape: new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5)),
+                    fixedRotation: true 
+                });
+                neighborBody.position.set(0, 2, -5); // 5 metros na sua frente
+                world.addBody(neighborBody);
+
+                document.getElementById('instructions').innerHTML = "<h1>CLIQUE PARA JOGAR</h1><p>O Neighbor está à sua frente</p>";
             });
 
-            // Controles
             setupControls();
             animate();
-        }
-
-        function createGround() {
-            const groundSize = { x: 100, y: 2, z: 100 };
-            const mesh = new THREE.Mesh(
-                new THREE.BoxGeometry(groundSize.x, groundSize.y, groundSize.z),
-                new THREE.MeshStandardMaterial({ color: 0x44aa44 })
-            );
-            mesh.position.y = -1;
-            mesh.receiveShadow = true;
-            scene.add(mesh);
-
-            const body = new CANNON.Body({
-                mass: 0,
-                shape: new CANNON.Box(new CANNON.Vec3(groundSize.x/2, groundSize.y/2, groundSize.z/2))
-            });
-            body.position.set(0, -1, 0);
-            world.addBody(body);
         }
 
         function setupControls() {
             controls = new PointerLockControls(camera, document.body);
             const inst = document.getElementById('instructions');
-            
             inst.addEventListener('click', () => {
                 if (!isMobile) controls.lock();
                 inst.style.display = 'none';
                 if(isMobile) document.getElementById('mobile-ui').style.display = 'block';
             });
 
-            document.addEventListener('keydown', (e) => handleKey(e.code, 1));
-            document.addEventListener('keyup', (e) => handleKey(e.code, 0));
-            
-            playerBody.addEventListener('collide', (e) => {
-                const contactNormal = new CANNON.Vec3();
-                e.contact.ni.negate(contactNormal);
-                if (contactNormal.dot(new CANNON.Vec3(0, 1, 0)) > 0.5) canJump = true;
-            });
+            document.addEventListener('keydown', e => handleKey(e.code, 1));
+            document.addEventListener('keyup', e => handleKey(e.code, 0));
+            playerBody.addEventListener('collide', () => canJump = true);
 
-            if (isMobile) {
-                // ... lógica do joystick (mesma do código anterior) ...
-                // Re-incluímos aqui para garantir funcionamento mobile
-                setupMobileEvents();
-            }
+            if (isMobile) setupMobileEvents();
         }
 
-        // Simplificado para foco no modelo
-        function handleKey(code, value) {
-            if(code === 'KeyW') moveState.fwd = value;
-            if(code === 'KeyS') moveState.bwd = value;
-            if(code === 'KeyA') moveState.left = value;
-            if(code === 'KeyD') moveState.right = value;
-            if(code === 'Space' && value && canJump) { playerBody.velocity.y = 8; canJump = false; }
+        function handleKey(code, val) {
+            if(code==='KeyW') moveState.fwd=val; if(code==='KeyS') moveState.bwd=val;
+            if(code==='KeyA') moveState.left=val; if(code==='KeyD') moveState.right=val;
+            if(code==='Space' && val && canJump) { playerBody.velocity.y=8; canJump=false; }
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            const time = performance.now();
-            const dt = Math.min((time - lastTime) / 1000, 0.1);
-            lastTime = time;
+            const dt = Math.min((performance.now() - lastTime) / 1000, 0.1);
+            lastTime = performance.now();
 
             world.step(1/60, dt, 3);
 
-            // Sincronizar Modelo e Câmera com a Física
-            if (neighborModel) {
-                neighborModel.position.copy(playerBody.position);
-                neighborModel.position.y -= 0.6; // Ajuste para os pés tocarem o chão
-                
-                // Rotacionar o modelo para a direção da câmera
-                const camDir = new THREE.Vector3();
-                camera.getWorldDirection(camDir);
-                neighborModel.rotation.y = Math.atan2(camDir.x, camDir.z);
-            }
+            // Movimento do Player
+            const camDir = new THREE.Vector3();
+            camera.getWorldDirection(camDir);
+            camDir.y = 0; camDir.normalize();
+            const camRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), camDir).normalize();
 
-            // Movimento
+            const speed = 7;
             const inputX = moveState.right - moveState.left;
             const inputZ = moveState.bwd - moveState.fwd;
 
-            if (inputX !== 0 || inputZ !== 0) {
-                camera.getWorldDirection(_vDirection);
-                _vDirection.y = 0;
-                _vDirection.normalize();
-                _vRight.crossVectors(_worldUp, _vDirection).normalize();
-                
-                const speed = 7;
-                playerBody.velocity.x = (_vDirection.x * -inputZ + _vRight.x * -inputX) * speed;
-                playerBody.velocity.z = (_vDirection.z * -inputZ + _vRight.z * -inputX) * speed;
+            if(inputX || inputZ) {
+                playerBody.velocity.x = (camDir.x * -inputZ + camRight.x * -inputX) * speed;
+                playerBody.velocity.z = (camDir.z * -inputZ + camRight.z * -inputX) * speed;
             } else {
-                playerBody.velocity.x = 0;
-                playerBody.velocity.z = 0;
+                playerBody.velocity.x = 0; playerBody.velocity.z = 0;
             }
 
+            // Câmera segue o corpo
             camera.position.copy(playerBody.position);
-            camera.position.y += 0.8; 
+            camera.position.y += 0.8;
+
+            // Sincronizar NPC Neighbor
+            if(neighborVisual && neighborBody) {
+                neighborVisual.position.copy(neighborBody.position);
+                neighborVisual.position.y -= 1; // Ajuste conforme o modelo
+            }
 
             renderer.render(scene, camera);
         }
 
-        // Função de eventos Mobile (Joystick e Câmera)
         function setupMobileEvents() {
             const joystick = document.getElementById('joystick-container');
             const knob = document.getElementById('joystick-knob');
             const camArea = document.getElementById('touch-camera-area');
 
-            joystick.addEventListener('touchmove', (e) => {
+            joystick.addEventListener('touchmove', e => {
                 const rect = joystick.getBoundingClientRect();
                 const touch = e.touches[0];
                 let dx = touch.clientX - (rect.left + 60);
@@ -223,8 +193,8 @@
                 const dist = Math.min(Math.sqrt(dx*dx + dy*dy), 40);
                 const angle = Math.atan2(dy, dx);
                 knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
-                moveState.right = dx > 10 ? 1 : 0; moveState.left = dx < -10 ? 1 : 0;
-                moveState.bwd = dy > 10 ? 1 : 0; moveState.fwd = dy < -10 ? 1 : 0;
+                moveState.right = dx > 15 ? 1 : 0; moveState.left = dx < -15 ? 1 : 0;
+                moveState.bwd = dy > 15 ? 1 : 0; moveState.fwd = dy < -15 ? 1 : 0;
             });
 
             joystick.addEventListener('touchend', () => {
@@ -241,6 +211,10 @@
                 camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x - dy * 0.005));
                 camera.quaternion.setFromEuler(new THREE.Euler(camera.rotation.x, camera.rotation.y, 0, 'YXZ'));
                 lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+            });
+            
+            document.getElementById('jump-button').addEventListener('touchstart', () => {
+                if(canJump) { playerBody.velocity.y = 8; canJump = false; }
             });
         }
     </script>
